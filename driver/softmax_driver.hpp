@@ -39,6 +39,42 @@
 #include <miopen/tensor.hpp>
 #include <numeric>
 #include <vector>
+#include <sstream>
+#include <fstream>
+
+template <typename T>
+void dumpSoftmaxBufferToFile(const char* fileName, T* data, size_t dataNumItems)
+{
+    std::ofstream outFile(fileName, std::ios::binary);
+    if(outFile)
+    {
+        outFile.write(reinterpret_cast<char*>(data), dataNumItems * sizeof(T));
+        outFile.close();
+        printf("Wrote output to file %s\n", fileName);
+    }
+    else
+    {
+        printf("Could not open file %s for writing\n", fileName);
+    }
+}
+
+template <typename T>
+bool readSoftmaxInputBufferFromFile(T* data, size_t dataNumItems, const char* fileName)
+{
+    std::ifstream infile(fileName, std::ios::binary);
+    if(infile)
+    {
+        infile.read(reinterpret_cast<char*>(data), dataNumItems * sizeof(T));
+        infile.close();
+        printf("Read data from input file %s\n", fileName);
+        return true;
+    }
+    else
+    {
+        printf("Could not open file %s for reading\n", fileName);
+        return false;
+    }
+}
 
 template <typename T>
 class SoftmaxDriver : public Driver
@@ -143,6 +179,8 @@ int SoftmaxDriver<T>::AddCmdLineArgs()
     inflags.AddInputFlag("time", 't', "0", "Time Each Layer (Default=0)", "int");
     inflags.AddInputFlag(
         "wall", 'w', "0", "Wall-clock Time Each Layer, Requires time == 1 (Default=0)", "int");
+    inflags.AddInputFlag("dump_output", 'o', "0", "Dumps the output buffers (Default=0)", "int");
+    inflags.AddInputFlag("in_data", 'd', "", "Input data filename (Default=)", "string");
 
     return 0;
 }
@@ -185,9 +223,19 @@ int SoftmaxDriver<T>::AllocateBuffersAndCopy()
     dout    = std::vector<T>(out_sz);
     dinhost = std::vector<T>(in_sz, 0);
 
-    for(int i = 0; i < in_sz; i++)
+    std::string inFileName   = inflags.GetValueStr("in_data");
+
+    bool dataRead = false;
+    if(!inFileName.empty())
     {
-        in[i] = static_cast<T>(static_cast<double>(rand()) * (1.0 / RAND_MAX));
+        dataRead = readSoftmaxInputBufferFromFile(in.data(), in_sz, inFileName.c_str());
+    }
+
+    if(!dataRead) {
+        for(int i = 0; i < in_sz; i++)
+        {
+            in[i] = static_cast<T>(static_cast<double>(rand()) * (1.0 / RAND_MAX));
+        }
     }
 
     for(int i = 0; i < out_sz; i++)
@@ -207,6 +255,8 @@ int SoftmaxDriver<T>::AllocateBuffersAndCopy()
 
     if(status != CL_SUCCESS)
         printf("Error copying data to GPU\n");
+
+
 
     return miopenStatusSuccess;
 }
@@ -248,6 +298,11 @@ int SoftmaxDriver<T>::RunForwardGPU()
 
     out_dev->FromGPU(GetStream(), out.data());
 
+    if(inflags.GetValueInt("dump_output"))
+    {
+        dumpBufferToFile("dump_softmax_out.bin", out.data(), out.size());
+    }
+
     return miopenStatusSuccess;
 }
 
@@ -288,6 +343,12 @@ int SoftmaxDriver<T>::RunForwardCPU()
             }
         }
     }
+
+    if(inflags.GetValueInt("dump_output"))
+    {
+        dumpBufferToFile("dump_softmax_out_cpu.bin", outhost.data(), outhost.size());
+    }
+
 
     return 0;
 }

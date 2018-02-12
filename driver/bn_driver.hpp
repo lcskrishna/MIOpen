@@ -655,12 +655,6 @@ int BatchNormDriver<T>::AllocateBuffersAndCopy()
             status |= createRunningBuffers();
         }
 
-        //Dump output file.
-        if(inflags.GetValueInt("dump_output"))
-        {
-            dumpBNBuffersToFile("bn_out_file.bin", out.data(), out.size());
-        }
-
     } // end forward
 
     if(back == 1)
@@ -736,6 +730,12 @@ void BatchNormDriver<T>::runGPUFwdInference(double epsilon, T alpha, T beta)
                                                  runningMean_dev->GetMem(),
                                                  runningVariance_dev->GetMem(),
                                                  epsilon);
+
+        if(inflags.GetValueInt("dump_output"))
+        {
+            dumpBNBuffersToFile("dump_bn_out.bin", out.data(), out.size());
+        }
+
     }
     else
     { // recalculate mean and variance
@@ -753,6 +753,11 @@ void BatchNormDriver<T>::runGPUFwdInference(double epsilon, T alpha, T beta)
                                                  nullptr,
                                                  nullptr,
                                                  epsilon);
+
+        if(inflags.GetValueInt("dump_output"))
+        {
+            dumpBNBuffersToFile("dump_bn_out_without_run.bin", out.data(), out.size());
+        }
     }
 
     return;
@@ -1359,6 +1364,12 @@ int BatchNormDriver<T>::VerifyForward()
     if(!anError)
     {
         std::cout << "Forward batch norm verified on CPU and GPU." << std::endl;
+    }
+
+    //Dump Output.
+    if(inflags.GetValueInt("dump_output"))
+    {
+        dumpBNBuffersToFile("dump_bn_out_verify.bin", out.data(), out.size());
     }
 
     return miopenStatusSuccess;
