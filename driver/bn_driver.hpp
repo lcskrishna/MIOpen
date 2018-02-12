@@ -41,6 +41,11 @@
 #include <miopen/tensor.hpp>
 #include <numeric>
 #include <vector>
+#include <fstream>
+#include <sstream>
+#include <vector>
+
+
 
 #define MIO_BN_DEBUG 0
 #define MIO_BN_MAX_DEBUGLOOP 65536
@@ -57,6 +62,40 @@
 #endif
 
 //#define BN_RUNFOR_PROFILER
+
+template <typename T>
+void dumpBNBuffersToFile(const char* fileName, T* data, size_t dataNumItems)
+{
+    std::ofstream outFile(fileName, std::ios::binary);
+    if(outFile)
+    {
+        outFile.write(reinterpret_cast<char*>(data), dataNumItems * sizeof(T));
+        outFile.close();
+        printf("Wrote output to file %s\n", fileName);
+    }
+    else
+    {
+        printf("Could not open file %s for writing\n", fileName);
+    }
+}
+
+template <typename T>
+bool readBNInputsFromFile(T* data, size_t dataNumItems, const char* fileName)
+{
+    std::ifstream infile(fileName, std::ios::binary);
+    if(infile)
+    {
+        infile.read(reinterpret_cast<char*>(data), dataNumItems * sizeof(T));
+        infile.close();
+        printf("Read data from input file %s\n", fileName);
+        return true;
+    }
+    else
+    {
+        printf("Could not open file %s for reading\n", fileName);
+        return false;
+    }
+}
 
 template <typename T>
 class BatchNormDriver : public Driver
@@ -268,6 +307,15 @@ int BatchNormDriver<T>::AddCmdLineArgs()
     inflags.AddInputFlag(
         "wall", 'w', "0", "Wall-clock Time Each Layer, Requires time == 1 (Default=0)", "int");
 
+    //Added arguments to read the buffers.
+    inflags.AddInputFlag("in_data", 'd', "", "Input data filename", "string");
+    inflags.AddInputFlag("in_weights", 'e', "", "Input scale filename", "string");
+    inflags.AddInputFlag("in_bias", 'x', "", "Input bias filename", "string");
+    inflags.AddInputFlag("estimated_mean", 'y', "", "Input Estimated mean filename.", "string");
+    inflags.AddInputFlag("estimated_variance", 'z', "", "Input Estimated variance bias filename.", "string");
+    inflags.AddInputFlag("dump_output", 'o', "0", "Dumps the output buffers (Default=0)", "int");
+
+
     return miopenStatusSuccess;
 }
 
@@ -389,7 +437,7 @@ int BatchNormDriver<T>::createSaveBuffers()
             saveMean        = std::vector<float>(sb_sz);
             saveInvVariance = std::vector<float>(sb_sz);
 
-            // CPU allocation
+            // CPU allocationrunningVariance_host
             saveMean_host        = std::vector<double>(sb_sz);
             saveInvVariance_host = std::vector<double>(sb_sz);
 
@@ -456,11 +504,31 @@ int BatchNormDriver<T>::createRunningBuffers()
             runningMean_host     = std::vector<double>(sb_sz);
             runningVariance_host = std::vector<double>(sb_sz);
 
-            // Populate
-            for(int i = 0; i < sb_sz; i++)
+            std::string estMeanFileName  = inflags.GetValueStr("estimated_mean");
+            std::string estVarFileName = inflags.GetValueStr("estimated_variance");
+            bool estMeanRead = false;
+            bool estVarRead = false;
+
+            if(!estMeanFileName.empty())
             {
-                runningMean_host[i] = runningMean[i] = double(rand() * (1.0 / RAND_MAX));
-                runningVariance_host[i] = runningVariance[i] = double(rand() * (1.0 / RAND_MAX));
+                estMeanRead = readBNInputsFromFile(runningMean.data(), sb_sz, estMeanFileName.c_str());
+                estMeanRead = readBNInputsFromFile(runningMean_host.data(), sb_sz, estMeanFileName.c_str());
+            }
+
+            if(!estVarFileName.empty())
+            {
+                estVarRead = readBNInputsFromFile(runningVariance.data(), sb_sz, estVarFileName.c_str());
+                estVarRead = readBNInputsFromFile(runningVariance_host.data(), sb_sz, estVarFileName.c_str());
+            }
+
+            if(!estMeanRead || !estVarRead) {
+
+                // Populate
+                for(int i = 0; i < sb_sz; i++)
+                {
+                    runningMean_host[i] = runningMean[i] = double(rand() * (1.0 / RAND_MAX));
+                    runningVariance_host[i] = runningVariance[i] = double(rand() * (1.0 / RAND_MAX));
+                }
             }
         }
         else
@@ -527,19 +595,52 @@ int BatchNormDriver<T>::AllocateBuffersAndCopy()
         scale_host = std::vector<float>(sb_sz);
         bias_host  = std::vector<float>(sb_sz);
 
-        // Data initialization
-        for(int i = 0; i < in_sz; i++)
+        std::string inFileName   = inflags.GetValueStr("in_data");
+        std::string weiFileName  = inflags.GetValueStr("in_weights");
+        std::string biasFileName = inflags.GetValueStr("in_bias");
+
+        srand(0);
+
+        bool dataRead = false;
+        if(!inFileName.empty())
         {
-            in[i] = std::fabs(double(rand() * (1.0 / RAND_MAX)));
+            dataRead = readBNInputsFromFile(in.data(), in_sz, inFileName.c_str());
         }
+
+        // Data initialization
+        if(!dataRead) {
+            for(int i = 0; i < in_sz; i++)
+            {
+                in[i] = std::fabs(double(rand() * (1.0 / RAND_MAX)));
+            }
+        }
+
         status |= in_dev->ToGPU(q, in.data());
 
         // Using random beta and gamma
         for(int i = 0; i < sb_sz; i++)
         {
-            scale[i] = scale_host[i] = double(rand() * (1.0 / RAND_MAX));
-            bias[i] = bias_host[i] = double(rand() * (1.0 / RAND_MAX));
+            bool scaleRead = false;
+            bool biasRead = false;
+            if(!weiFileName.empty()) {
+                scaleRead = readBNInputsFromFile(scale.data(), sb_sz, weiFileName.c_str());
+                scaleRead = readBNInputsFromFile(scale_host.data(), sb_sz, weiFileName.c_str());
+            }
+
+            if(!scaleRead) {
+                scale[i] = scale_host[i] = double(rand() * (1.0 / RAND_MAX));
+            }
+
+            if(!biasFileName.empty()) {
+                biasRead = readBNInputsFromFile(bias.data(), sb_sz, biasFileName.c_str());
+                biasRead = readBNInputsFromFile(bias_host.data(), sb_sz, biasFileName.c_str());
+            }
+
+            if(!biasRead) {
+                bias[i] = bias_host[i] = double(rand() * (1.0 / RAND_MAX));
+            }
         }
+
         status |= scale_dev->ToGPU(q, scale.data());
         status |= bias_dev->ToGPU(q, bias.data());
         status |= out_dev->ToGPU(q, out.data());
@@ -553,6 +654,13 @@ int BatchNormDriver<T>::AllocateBuffersAndCopy()
         { // inference
             status |= createRunningBuffers();
         }
+
+        //Dump output file.
+        if(inflags.GetValueInt("dump_output"))
+        {
+            dumpBNBuffersToFile("bn_out_file.bin", out.data(), out.size());
+        }
+
     } // end forward
 
     if(back == 1)
