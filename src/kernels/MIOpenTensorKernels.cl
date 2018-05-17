@@ -90,6 +90,14 @@ __kernel void OpTensorFwdBias(global MIOPEN_TYPE* a,
                               const long Coffset,
                               const int num_wg)
 {
+
+    //add support for fusing leaky relu.
+    //if beta less than -2, enable leaky relu with leaky_alpha = beta + 3 and resetting beta to 0.
+    //else disable leaky relu by setting leaky_alpha = 1.
+    MIOPEN_TYPE leaky_alpha;
+    leaky_alpha = ((beta <= -2) ? beta + 3 : 1);
+    beta = ((beta <= -2) ? 0 : beta);
+
     global MIOPEN_TYPE* a_off = a + Aoffset;
     global MIOPEN_TYPE* b_off = b + Boffset;
     global MIOPEN_TYPE* c_off = c + Coffset;
@@ -110,7 +118,8 @@ __kernel void OpTensorFwdBias(global MIOPEN_TYPE* a,
         while(lid < work_per_wg)
         {
             int index    = o_n * c_nstride + o_c * c_cstride + lid;
-            c_off[index] = MIOPEN_TENSOR_OP(a_off[index] * alpha0, operand) + beta * c_off[index];
+            MIOPEN_TYPE value = MIOPEN_TENSOR_OP(a_off[index] * alpha0, operand) + beta * c_off[index];
+            c_off[index] = max(leaky_alpha * value, value);
             lid += get_local_size(0);
         }
 
@@ -125,8 +134,8 @@ __kernel void OpTensorFwdBias(global MIOPEN_TYPE* a,
             int o_hw     = lid % work_off;
             int o_n      = lid / work_off;
             int index    = o_n * c_nstride + gid * c_cstride + o_hw;
-            c_off[index] = MIOPEN_TENSOR_OP(a_off[index] * alpha0, operand) + beta * c_off[index];
-
+            MIOPEN_TYPE value = MIOPEN_TENSOR_OP(a_off[index] * alpha0, operand) + beta * c_off[index];
+            c_off[index] = max(leaky_alpha * value, value);
             lid += get_local_size(0);
         }
 #endif // INCR_WG
