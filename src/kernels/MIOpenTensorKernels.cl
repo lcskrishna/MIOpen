@@ -84,19 +84,15 @@ __kernel void OpTensorFwdBias(global MIOPEN_TYPE* a,
                               const int work_per_wg,
                               const MIOPEN_TYPE alpha0,
                               const MIOPEN_TYPE alpha1,
-                              const MIOPEN_TYPE beta,
+                              const MIOPEN_TYPE beta_arg,
                               const long Aoffset,
                               const long Boffset,
                               const long Coffset,
                               const int num_wg)
 {
-
-    //add support for fusing leaky relu.
-    //if beta less than -2, enable leaky relu with leaky_alpha = beta + 3 and resetting beta to 0.
-    //else disable leaky relu by setting leaky_alpha = 1.
-    MIOPEN_TYPE leaky_alpha;
-    leaky_alpha = ((beta <= -2) ? beta + 3 : 1);
-    beta = ((beta <= -2) ? 0 : beta);
+    //fusing leaky relu into bias : if beta = (leaky_alpha - 3) the leakyrelu is fused into bias, else there is no fusion.
+    MIOPEN_TYPE leaky_alpha = ((beta_arg <= -2) ? beta_arg + 3 : 1);
+    MIOPEN_TYPE beta = ((beta_arg <= -2) ? 0 : beta_arg);
 
     global MIOPEN_TYPE* a_off = a + Aoffset;
     global MIOPEN_TYPE* b_off = b + Boffset;
